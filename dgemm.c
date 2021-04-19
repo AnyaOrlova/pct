@@ -1,110 +1,125 @@
-/*
- * dgemm.c: DGEMM - Double-precision General Matrix Multiply.
- *
- */
-
+#include "hpctimer.h"
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "hpctimer.h"
-#define BS 1024
-enum {
-    N = 512,
-    NREPS = 3
-};
+enum { N = 15000 };
 
-double A[N * N], B[N * N], C[N * N];
-
-void dgemm_def(double *a, double *b, double *c, int n)
-{
-    int i, j, k;
-
-    for (i = 0; i < n; i++) {
-        for (j = 0; j < n; j++) {
-            for (k = 0; k < n; k++) {
-                *(c + i * n + j) += *(a + i * n + k) * *(b + k * n + j);
-			}
-		}
-	}
+/*последовательная версия*/
+void matrix_vector_product(double *a, double *b, double *c, int m, int n) {
+  for (int i = 0; i < m; i++) {
+    c[i] = 0.0;
+    for (int j = 0; j < n; j++)
+      c[i] += a[i * n + j] * b[j];
+  }
 }
 
-void dgemm_transpose(double *a, double *b, double *c, int n)
-{
-    int i, j, k;
+void matrix_vector_product_omp(double *a, double *b, double *c, int m, int n,
+                               int stream) {
+#pragma omp parallel num_threads(stream)
+  {
+    int nthreads = omp_get_num_threads();
+    int threadid = omp_get_thread_num();
+    int items_per_thread = m / nthreads;
+    int lb = threadid * items_per_thread; // ниж. граница
+    int ub = (threadid == nthreads - 1)
+                 ? (m - 1)
+                 : (lb + items_per_thread - 1); // верх. граница
 
-    for (i = 0; i < n; i++) {
-        for (k = 0; k < n; k++) {
-            for (j = 0; j < n; j++) {
-                *(c + i * n + j) += *(a + i * n + k) * *(b + k * n + j);
-                        }
-                }
-        }
-
-}
-
-void dgemm_block(double *a, double *b, double *c, int n)
-{
-    int i, j, k, k0, j0, i0; double *a0, *b0, *c0;
-
-    for (i = 0; i < n; i += BS)
-		for (j = 0; j < n; j += BS)
-			for (k = 0; k < n; k += BS)
-				for (i0 = 0, c0 = (c + i * n + j), a0 = (a + i * n + k); i0 < BS; ++i0, c0 += n, a0 += n)
-					for (k0 = 0, b0 = (b + k * n + j); k0 < BS; ++k0, b0 += n)
-						for (j0 = 0; j0 < BS; ++j0)
-								c0[j0] += a0[k0] * b0[j0];
-
-}
-
-void init_matrix(double *a, double *b, double *c, int n)
-{
-	int i, j, k;
-
-	for (i = 0; i < n; i++) {
-		for (j = 0; j < n; j++) {
-			for (k = 0; k < n; k++) {
-                *(a + i * n + j) = 1.0;
-                *(b + i * n + j) = 2.0;
-                *(c + i * n + j) = 0.0;
-			}
-		}
-	}
-}
-
-void print_matrix(double *a, int n)
-{
-	int i, j;
-
-	printf("Matrix:\n");
-	for (i = 0; i < n; i++) {
-		for (j = 0; j < n; j++) {
-			printf("%12.2f", *(a + i * n + j));
-		}
-		printf("\n");
-	}
-}
-
-int main(int argc, char **argv)
-{
-    int i;
-    double t;
-
-    init_matrix(A, B, C, N);
-
-    t = hpctimer_getwtime();
-    for (i = 0; i < NREPS; i++) {
-        //dgemm_def(A, B, C, N);
-        //dgemm_transpose(A, B, C, N);
-        //dgemm_transpose2(A, B, C, N);
-        dgemm_block(A, B, C, N);
+    for (int i = lb; i < ub; i++) {
+      c[i] = 0.0;
+      for (int j = 0; j < n; j++) {
+        c[i] = c[i] + a[i * n + j] * b[j];
+      }
     }
-    t = hpctimer_getwtime() - t;
-    t = t / NREPS;
-
-    /*print_matrix(C, N);*/
-
-    printf("Elapsed time: %.6f sec.\n", t);
-
-    return 0;
+  }
 }
 
+/*последовательная версия*/
+double run_serial(int m, int n) {
+  double *a, *b, *c;
+
+  a = malloc(sizeof(*a) * m * n);
+  b = malloc(sizeof(*b) * n);
+  c = malloc(sizeof(*c) * m);
+
+  for (int i = 0; i < m; i++) {
+    for (int j = 0; j < n; j++) {
+      a[i * n + j] = i + j;
+    }
+    c[i] = 0.0;
+  }
+
+  for (int j = 0; j < n; j++) {
+    b[j] = j;
+  }
+
+  double t = hpctimer_getwtime();
+  matrix_vector_product(a, b, c, m, n);
+  t = hpctimer_getwtime() - t;
+
+  free(a);
+  free(b);
+  free(c);
+
+  return t;
+}
+
+double run_parallel(int m, int n, int stream) {
+  double *a, *b, *c;
+
+  a = malloc(sizeof(*a) * m * n);
+  b = malloc(sizeof(*b) * n);
+  c = malloc(sizeof(*c) * m);
+
+#pragma omp parallel num_threads(stream)
+  {
+    int nthreads = omp_get_num_threads();
+    int threadid = omp_get_thread_num();
+    int items_per_thread = m / nthreads;
+    int lb = threadid * items_per_thread;
+    int ub = (threadid == nthreads - 1) ? (m - 1) : (lb + items_per_thread - 1);
+
+    for (int i = lb; i <= ub; i++) {
+      for (int j = 0; j < n; j++)
+        a[i * n + j] = i + j;
+      c[i] = 0.0;
+    }
+  }
+
+  for (int j = 0; j < n; j++) {
+    b[j] = j;
+  }
+
+  double t = hpctimer_getwtime();
+  matrix_vector_product_omp(a, b, c, m, n, stream);
+  t = hpctimer_getwtime() - t;
+
+  free(a);
+  free(b);
+  free(c);
+
+  return t;
+}
+
+int main(int argc, char **argv) {
+  int border = 25000;
+  int step = 5000;
+
+  for (int j = N; j <= border; j += step) {
+    printf("%d\n", j);
+    double t1 = run_serial(j, j);
+    printf("T1 = %.6f\n", t1);
+
+    for (int i = 2; i <= 8; i += 2) {
+
+      double t2 = run_parallel(j, j, i);
+      printf("T%d = %.6f\t", i, t2);
+
+      printf("S = %.6lf\n", t1 / t2);
+    }
+    printf("\n");
+  }
+
+  return 0;
+}

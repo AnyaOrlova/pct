@@ -8,14 +8,14 @@
 ----------------
 */
 
-double f(double x) { return (1 - exp(0.7 / x)) / (2 + x); }
+double f(double x) { return (pow(x,4)) / (0.5 * pow(x,2) + x + 6); }
 
 double Runge(int stream) {
   double t = omp_get_wtime();
 
   const double eps = 1E-5;
-  double a = 1.0;
-  double b = 2.0;
+  double a = 0.4;
+  double b = 1.5;
 
   const int n0 = 100000000;
 
@@ -43,9 +43,7 @@ double Runge(int stream) {
         delta = fabs(sq[k] - sq[k ^ 1]) / 3.0;
     }
 
-/*#pragma omp master
-    printf("Stream:%d\tRes = %.6f\t", omp_get_num_threads(), sq[k] * sq[k]);
- */ }
+ }
 
   t = omp_get_wtime() - t;
 
@@ -54,7 +52,7 @@ double Runge(int stream) {
 
 double getrand(unsigned int *seed) { return (double)rand_r(seed) / RAND_MAX; }
 
-double func(double x, double y) { return x / pow(y, 2); }
+double func(double x, double y) { return exp(x-y); }
 
 /*
    MonteCarlo
@@ -76,10 +74,10 @@ double MonteCarlo(int n, int stream) {
 
 #pragma omp for nowait
     for (int i = 0; i < n; i++) {
-      double x = getrand(&seed);
-      double y = getrand(&seed) * 5;
+      double x = getrand(&seed) * 0;
+      double y = getrand(&seed);
 
-      if (y >= 2) {
+      if (x >= -1) {
         in_loc++;
         s_loc += func(x, y);
       }
